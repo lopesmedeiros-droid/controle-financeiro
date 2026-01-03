@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Controle Financeiro</title>
+
+<!-- LIBS -->
+<script src="https://unpkg.com/@zxing/library@latest"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+
+<style>
+body { font-family: Arial; background:#f2f2f2; }
+.container { max-width:480px; margin:20px auto; background:#fff; padding:15px; border-radius:8px; }
+input, select, button { width:100%; padding:10px; margin:5px 0; }
+button { background:#1e88e5; color:#fff; border:none; cursor:pointer; }
+.hidden { display:none; }
+video { width:100%; border-radius:6px; margin-top:8px; }
+table { width:100%; border-collapse:collapse; margin-top:10px; }
+th, td { border:1px solid #ccc; padding:6px; font-size:14px; }
+.resumo { font-weight:bold; margin-top:10px; }
+</style>
+</head>
+
+<body>
+
+<!-- LOGIN -->
+<div class="container" id="loginBox">
+<h3>Login</h3>
+<input id="loginEmail" type="email" placeholder="Email">
+<input id="loginSenha" type="password" placeholder="Senha">
+<button onclick="login()">Entrar</button>
+<p><a href="#" onclick="mostrarCadastro()">Criar conta</a></p>
+</div>
+
+<!-- CADASTRO -->
+<div class="container hidden" id="cadastroBox">
+<h3>Cadastrar</h3>
+<input id="cadEmail" type="email" placeholder="Email">
+<input id="cadSenha" type="password" placeholder="Senha">
+<button onclick="cadastrar()">Cadastrar</button>
+<p><a href="#" onclick="mostrarLogin()">Voltar</a></p>
+</div>
+
+<!-- APP -->
+<div class="container hidden" id="appBox">
+<h3>Controle Financeiro</h3>
+<button onclick="logout()">Sair</button>
+
+<select id="tipo">
+<option value="despesa">Despesa</option>
+<option value="receita">Receita</option>
+</select>
+
+<input id="descricao" type="text" placeholder="Descrição da receita ou despesa">
+<input id="valor" type="number" step="0.01" placeholder="Valor (R$)">
+<input id="data" type="date">
+
+<button onclick="salvar()">Salvar Lançamento</button>
+
+<h4>Leitura de Código</h4>
+<video id="video" playsinline></video>
+<button onclick="iniciarScan()">Iniciar Leitura</button>
+
+<table>
+<thead>
+<tr>
+<th>Tipo</th>
+<th>Descrição</th>
+<th>Valor</th>
+<th>Data</th>
+</tr>
+</thead>
+<tbody id="tabela"></tbody>
+</table>
+
+<div class="resumo" id="resumo"></div>
+
+<button onclick="gerarPDF()">Baixar PDF</button>
+</div>
+
+<script>
+let dados = [];
+
+/* ===== LOGIN ===== */
+function mostrarCadastro(){loginBox.classList.add("hidden");cadastroBox.classList.remove("hidden");}
+function mostrarLogin(){cadastroBox.classList.add("hidden");loginBox.classList.remove("hidden");}
+
+function cadastrar(){
+  if(!cadEmail.value||!cadSenha.value) return alert("Preencha email e senha");
+  localStorage.setItem("usuario",JSON.stringify({email:cadEmail.value,senha:cadSenha.value}));
+  alert("Cadastro realizado"); mostrarLogin();
+}
+
+function login(){
+  const user=JSON.parse(localStorage.getItem("usuario"));
+  if(!user) return alert("Usuário não cadastrado");
+  if(loginEmail.value===user.email && loginSenha.value===user.senha){
+    localStorage.setItem("logado","true");
+    iniciarApp();
+  } else alert("Email ou senha inválidos");
+}
+
+function logout(){localStorage.removeItem("logado");location.reload();}
+function iniciarApp(){loginBox.classList.add("hidden");cadastroBox.classList.add("hidden");appBox.classList.remove("hidden");}
+if(localStorage.getItem("logado")==="true") iniciarApp();
+
+/* ===== SISTEMA ===== */
+function salvar(){
+  if(!descricao.value||!valor.value||!data.value)
+    return alert("Preencha descrição, valor e data");
+
+  dados.push({
+    tipo:tipo.value,
+    descricao:descricao.value,
+    valor:parseFloat(valor.value),
+    data:data.value
+  });
+
+  atualizar();
+  descricao.value=""; valor.value=""; data.value="";
+}
+
+function atualizar(){
+  tabela.innerHTML="";
+  let r=0,d=0;
+
+  dados.forEach(l=>{
+    const tr=tabela.insertRow();
+    tr.insertCell(0).innerText=l.tipo;
+    tr.insertCell(1).innerText=l.descricao;
+    tr.insertCell(2).innerText="R$ "+l.valor.toFixed(2);
+    tr.insertCell(3).innerText=l.data;
+    l.tipo==="receita"?r+=l.valor:d+=l.valor;
+  });
+
+  resumo.innerHTML=`
+    Receita: R$ ${r.toFixed(2)}<br>
+    Despesa: R$ ${d.toFixed(2)}<br>
+    Resultado: R$ ${(r-d).toFixed(2)}
+  `;
+}
+
+/* ===== SCANNER ===== */
+async function iniciarScan(){
+  try{
+    const reader=new ZXing.BrowserMultiFormatReader();
+    const devices=await navigator.mediaDevices.enumerateDevices();
+    const cam=devices.find(d=>d.kind==="videoinput");
+    if(!cam) return alert("Câmera não encontrada");
+    const result=await reader.decodeOnceFromVideoDevice(cam.deviceId,"video");
+    reader.reset();
+    processarCodigo(result.text);
+  }catch{alert("Falha na leitura do código");}
+}
+
+function processarCodigo(texto){
+  texto=texto.toLowerCase();
+
+  let tipoLanc="despesa";
+  let descAuto="Despesa registrada";
+
+  if(texto.includes("pix")||texto.includes("bcb")){
+    tipoLanc="receita";
+    descAuto="Receita via PIX";
+  }
+
+  const v=texto.match(/(\d+[\.,]\d{2})/);
+  const valorExtraido=v?v[1].replace(",","."):null;
+
+  let dataExtraida;
+  const d=texto.match(/(\d{2}\/\d{2}\/\d{4})|(\d{4}-\d{2}-\d{2})/);
+  if(d){
+    if(d[0].includes("/")){
+      const [dd,mm,aa]=d[0].split("/");
+      dataExtraida=`${aa}-${mm}-${dd}`;
+    } else dataExtraida=d[0];
+  } else dataExtraida=new Date().toISOString().split("T")[0];
+
+  tipo.value=tipoLanc;
+  descricao.value=descAuto;
+  if(valorExtraido) valor.value=valorExtraido;
+  data.value=dataExtraida;
+}
+
+/* ===== PDF ===== */
+function gerarPDF(){
+  if(!dados.length) return alert("Sem dados");
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF();
+  doc.text("Relatório Financeiro",14,15);
+  doc.autoTable({
+    head:[["Tipo","Descrição","Valor","Data"]],
+    body:dados.map(l=>[
+      l.tipo,
+      l.descricao,
+      "R$ "+l.valor.toFixed(2),
+      l.data
+    ]),
+    startY:20
+  });
+  doc.save("relatorio-financeiro.pdf");
+}
+</script>
+
+</body>
+</html>
